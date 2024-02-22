@@ -6,6 +6,7 @@ from scipy.fft import fft
 import numpy as np
 from sklearn.decomposition import TruncatedSVD
 from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 def calculate_average_weekly_sales():
     selected_store_data['Week_of_Year'] = selected_store_data['Date'].dt.isocalendar().week
@@ -47,7 +48,7 @@ def show_fourier_transform():
         # Highlight the dominant frequency
         plt.axvline(x=dominant_frequency, color='r', linestyle='--', label=f'Dominant Frequency: {dominant_frequency:.2f} Weeks')
         plt.legend()
-
+        plt.savefig(f'fourier_transform_{store_number}.png')
         plt.show()
 
         # Print the dominant frequency
@@ -73,6 +74,7 @@ def show_weekly_sales_by_year():
 
     plt.grid(True)
     plt.tight_layout()
+    plt.savefig(f'year_weekly_sales_{store_number}.png')
     plt.show()
     
 def svd_decomposition():
@@ -176,6 +178,49 @@ def correlation_matrix():
     print(f"Correlation with MarkDown5: {correlation_sales_markdown5:.2f}")
     print("-" * 50)
 
+def sales_forecast():
+    selected_store_data_copy = selected_store_data.copy()
+    selected_store_data_copy['Date'] = pd.to_datetime(selected_store_data_copy['Date'])
+  
+  # Sort DataFrame by date
+    selected_store_data_copy.sort_values(by='Date', inplace=True)
+  
+  # Set 'Date' as the index
+    selected_store_data_copy.set_index('Date', inplace=True)
+    
+   # Create a time series with weekly frequency
+    ts = selected_store_data_copy['Weekly_Sales']
+   
+   # Split the data into training and testing sets
+    train_size = int(len(ts) * 0.8)
+    train, test = ts[:train_size], ts[train_size:]
+   
+   # Define and fit the SARIMA model
+    order = (1, 1, 1)  # (p, d, q)
+    seasonal_order = (0, 1, 1, 12)  # (P, D, Q, s)
+    model = SARIMAX(train, order=order, seasonal_order=seasonal_order, enforce_stationarity=False, enforce_invertibility=False)
+    results = model.fit(disp=False)
+    print(results.summary())
+   
+   # Predict future sales
+    forecast_steps = len(test)
+    forecast = results.get_forecast(steps=forecast_steps)
+    forecast_index = pd.date_range(start=test.index[0], periods=forecast_steps, freq='W')
+   
+   
+   # Plot the results
+    plt.figure(figsize=(10, 6))
+    plt.plot(ts, label='Actual Sales')
+    plt.plot(train.index, results.fittedvalues, label='Training Fit', color='green')
+    plt.plot(test.index, forecast.predicted_mean, label='Forecast', color='red')
+    plt.fill_between(test.index, forecast.conf_int()['lower Weekly_Sales'], forecast.conf_int()['upper Weekly_Sales'], color='pink', alpha=0.3)
+    plt.xlabel('Date')
+    plt.ylabel('Weekly Sales')
+    plt.legend()
+    plt.title('SARIMA Model - Weekly Sales Forecast')
+    plt.savefig(f'sarima_model_{store_number}.png')
+    plt.show()
+
 def seasonal_decomposition():
     selected_store_data_copy = selected_store_data.copy()
     
@@ -228,6 +273,7 @@ def seasonal_decomposition():
     plt.title('Residual Component')
     
     plt.tight_layout()
+    plt.savefig(f'seasonal_decomposition_{store_number}.png')
     plt.show()
 
 
@@ -270,6 +316,7 @@ if 1 <= store_number <= max_store_number:
     correlation_matrix()
     total_sale()
     seasonal_decomposition()
+    sales_forecast()
     
     
 else:
