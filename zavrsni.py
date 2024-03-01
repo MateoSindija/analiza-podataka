@@ -7,6 +7,10 @@ import numpy as np
 from sklearn.decomposition import TruncatedSVD
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+from pmdarima.model_selection import train_test_split
+from pmdarima.arima.utils import ndiffs, nsdiffs
+import pmdarima as pm
+from datetime import timedelta
 
 def calculate_average_weekly_sales():
     selected_store_data['Week_of_Year'] = selected_store_data['Date'].dt.isocalendar().week
@@ -14,46 +18,32 @@ def calculate_average_weekly_sales():
     print(f'Average sales by weeks for store {store_number} {average_weekly_sales} ')
     
 
-def show_fourier_transform():
-    # Filter data for the specific store
-    store_data = selected_store_data.copy()
-
-    # Assuming 'Date' is the datetime column
-    store_data['Date'] = pd.to_datetime(store_data['Date'])
+def show_fourier_transform(selected_store):
+    store_data = merged_data[merged_data['Store'] == selected_store].copy()
     
-    # Assuming 'Weekly_Sales' is the column you want to analyze
-    weekly_sales = store_data.groupby(store_data['Date'].dt.to_period("W"))["Weekly_Sales"].sum()
+    # Perform Fourier transformation on weekly sales
+    sales_values = store_data['Weekly_Sales'].values
+    fourier_transform = np.fft.fft(sales_values)
+    freq = np.fft.fftfreq(len(sales_values))
+    
+    peak_index = np.argmax(np.abs(fourier_transform))
 
-    N = len(weekly_sales)
-    T = 1.0 / 52  
-    yf = fft(weekly_sales.values)
-    xf = np.fft.fftfreq(N, T)[:N]
-
-    # Find the index of the peak frequency with amplitude above a threshold
-    threshold=0.1
-    peak_indices = np.where(np.abs(yf) > threshold)[0]
-    if len(peak_indices) == 0:
-        print(f"No dominant frequency found for Store {store_number}.")
-    else:
-        dominant_frequency = 1.0 / xf[peak_indices[np.argmax(np.abs(yf[peak_indices]))]]
-
-        # Plot the Fourier Transform
-        plt.figure(figsize=(12, 6))
-        plt.plot(1.0 / xf, 2.0 / N * np.abs(yf), marker='o')
-        plt.title(f'Fourier Transform for Weekly Sales (Store {store_number})')
-        plt.xlabel('Period (Weeks)')
-        plt.ylabel('Amplitude')
-        plt.grid(True)
-
-        # Highlight the dominant frequency
-        plt.axvline(x=dominant_frequency, color='r', linestyle='--', label=f'Dominant Frequency: {dominant_frequency:.2f} Weeks')
-        plt.legend()
-        plt.savefig(f'fourier_transform_{store_number}.png')
-        plt.show()
-
-        # Print the dominant frequency
-        print(f'Dominant Frequency for Store {store_number}: {dominant_frequency:.2f} Weeks')
-        
+    dominant_frequency = freq[peak_index]
+    dominant_amplitude = np.abs(fourier_transform[peak_index])
+    
+    # Plot the Fourier transformation
+    plt.figure(figsize=(10, 6))
+    plt.plot(freq, np.abs(fourier_transform))
+    plt.scatter(dominant_frequency, dominant_amplitude, color='red', label='Dominant Frequency')
+    plt.text(dominant_frequency, dominant_amplitude, f'({dominant_frequency:.2f}, {dominant_amplitude:.2f})',
+             verticalalignment='bottom', horizontalalignment='left', color='red', fontsize=10)
+    plt.title(f'Fourier Transformation of Weekly Sales for Store {selected_store}')
+    plt.xlabel('Frequency')
+    plt.ylabel('Amplitude')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    plt.savefig(f'fourier_transform_{store_number}.png')
         
         
 def show_weekly_sales_by_year():
@@ -114,6 +104,21 @@ def growth_rate():
     most_growth_dept = growth_rate.idxmax()
 
     print(f"The department with the highest average growth rate is Department {most_growth_dept}.")
+    
+def correlation_between_stores(store_number):
+
+    store_df = merged_data.copy()
+    
+    correlation_matrix = store_df.pivot_table(index='Date', columns='Store', values='Weekly_Sales', aggfunc='mean').corr()
+    
+    correlation_with_store = correlation_matrix[store_number]
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=correlation_with_store.index, y=correlation_with_store.values, color='skyblue')
+    plt.title(f'Correlation of Weekly Sales with Store {store_number}')
+    plt.xlabel('Other Stores')
+    plt.ylabel('Correlation')
+    plt.savefig(f'correlation_between_store_{store_number}_and_other_stores.png')
+    plt.show()
 
 def correlation_matrix():
     selected_columns = ['Weekly_Sales', 'Fuel_Price', 'CPI', 'IsHoliday_y', 'Unemployment', 'Temperature']
@@ -178,48 +183,54 @@ def correlation_matrix():
     print(f"Correlation with MarkDown5: {correlation_sales_markdown5:.2f}")
     print("-" * 50)
 
-def sales_forecast():
-    selected_store_data_copy = selected_store_data.copy()
-    selected_store_data_copy['Date'] = pd.to_datetime(selected_store_data_copy['Date'])
+def sales_forecast(selected_store):
+# Select a store for SARIMA modeling
   
-  # Sort DataFrame by date
-    selected_store_data_copy.sort_values(by='Date', inplace=True)
-  
-  # Set 'Date' as the index
-    selected_store_data_copy.set_index('Date', inplace=True)
+    store_data = merged_data[merged_data['Store'] == selected_store].copy()
     
-   # Create a time series with weekly frequency
-    ts = selected_store_data_copy['Weekly_Sales']
-   
-   # Split the data into training and testing sets
-    train_size = int(len(ts) * 0.8)
-    train, test = ts[:train_size], ts[train_size:]
-   
-   # Define and fit the SARIMA model
-    order = (1, 1, 1)  # (p, d, q)
-    seasonal_order = (0, 1, 1, 12)  # (P, D, Q, s)
-    model = SARIMAX(train, order=order, seasonal_order=seasonal_order, enforce_stationarity=False, enforce_invertibility=False)
-    results = model.fit(disp=False)
-    print(results.summary())
-   
-   # Predict future sales
-    forecast_steps = len(test)
-    forecast = results.get_forecast(steps=forecast_steps)
-    forecast_index = pd.date_range(start=test.index[0], periods=forecast_steps, freq='W')
-   
-   
-   # Plot the results
-    plt.figure(figsize=(10, 6))
-    plt.plot(ts, label='Actual Sales')
-    plt.plot(train.index, results.fittedvalues, label='Training Fit', color='green')
-    plt.plot(test.index, forecast.predicted_mean, label='Forecast', color='red')
-    plt.fill_between(test.index, forecast.conf_int()['lower Weekly_Sales'], forecast.conf_int()['upper Weekly_Sales'], color='pink', alpha=0.3)
+
+
+    # Prepare data for SARIMA model
+    date_sales = store_data[['Date', 'Weekly_Sales']].set_index('Date')
+    date_sales.index = pd.to_datetime(date_sales.index)
+    date_sales = date_sales.resample('W').sum()  # Resample to weekly frequency
+    
+    # Train-test split
+    train_size = int(len(date_sales) * 0.8)
+    train, test = date_sales.iloc[:train_size], date_sales.iloc[train_size:]
+    
+    # Determine differencing orders
+    d = ndiffs(train['Weekly_Sales'], test='adf')
+    D = nsdiffs(train['Weekly_Sales'], m=12, test='ocsb')
+    
+    # Perform grid search for optimal parameters
+    model = pm.auto_arima(train['Weekly_Sales'],
+                          seasonal=True, m=12,
+                          d=d, D=D,
+                          suppress_warnings=True,
+                          stepwise=True,
+                          error_action='ignore',
+                          trace=True)
+    
+    # Summary of the best model
+    print(model.summary())
+    
+    # Make predictions on the test set
+    forecast, conf_int = model.predict(n_periods=len(test), return_conf_int=True)
+    forecast_index = pd.date_range(start=train.index[-1] + timedelta(days=1), periods=len(test), freq='W')
+    
+    # Plot the actual vs. predicted values
+    plt.figure(figsize=(12, 6))
+    plt.plot(train.index, train['Weekly_Sales'], label='Train')
+    plt.plot(test.index, test['Weekly_Sales'], label='Test')
+    plt.plot(forecast_index, forecast, label='SARIMA Forecast', color='red')
+    plt.fill_between(forecast_index, conf_int[:, 0], conf_int[:, 1], color='pink', alpha=0.3)
+    plt.title(f'SARIMA Model Forecast for Store {selected_store}')
     plt.xlabel('Date')
     plt.ylabel('Weekly Sales')
     plt.legend()
-    plt.title('SARIMA Model - Weekly Sales Forecast')
-    plt.savefig(f'sarima_model_{store_number}.png')
     plt.show()
+    plt.savefig(f'sarima_model_{store_number}.png')
 
 def seasonal_decomposition():
     selected_store_data_copy = selected_store_data.copy()
@@ -294,7 +305,7 @@ merged_data['Unemployment'].interpolate(method='linear', inplace=True)
 merged_data['CPI'].interpolate(method='linear', inplace=True)
 merged_data = merged_data.drop(columns='IsHoliday_x', errors='ignore')
 
-store_number = 10  # Change this to the desired store number
+store_number = 9  # Change this to the desired store number
 max_store_number = 44  # Maximum allowed store number
 
 # Check if the store number is within the allowed range
@@ -310,13 +321,14 @@ if 1 <= store_number <= max_store_number:
 
     show_weekly_sales_by_year()
     calculate_average_weekly_sales()
-    show_fourier_transform()
+    show_fourier_transform(store_number)
     svd_decomposition()
     growth_rate()
     correlation_matrix()
     total_sale()
     seasonal_decomposition()
-    sales_forecast()
+    sales_forecast(store_number)
+    correlation_between_stores(store_number)
     
     
 else:
